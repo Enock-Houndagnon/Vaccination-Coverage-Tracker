@@ -42,7 +42,7 @@ export default function LoginForm({ onLoginSuccess, onNavigateToRegister, langua
     if (!email || !password) { setError(t.errorFields); return; }
     setLoading(true);
     try {
-      const response = await axios.post('http://127.0.0.1:5000/api/login', { email, password });
+      const response = await axios.post('https://vaccination-coverage-tracker-backend.onrender.com/api/login', { email, password });
       if (response.data.user) onLoginSuccess(response.data.user);
     } catch (err) {
       setError(t.errorAuth);

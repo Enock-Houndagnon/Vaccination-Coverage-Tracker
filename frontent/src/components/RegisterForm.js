@@ -83,7 +83,7 @@ export default function RegisterForm({ onNavigateToLogin, language }) {
 
     setLoading(true);
     try {
-      await axios.post('http://127.0.0.1:5000/api/register', { ...formData, company: finalCompany });
+      await axios.post('https://vaccination-coverage-tracker-backend.onrender.com/api/register', { ...formData, company: finalCompany });
       setSuccess(true);
     } catch (err) {
       setError(err.response?.data?.error || "Erreur de connexion");

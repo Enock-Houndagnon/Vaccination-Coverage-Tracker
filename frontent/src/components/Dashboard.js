@@ -92,8 +92,8 @@ export default function Dashboard({ user, onLogout, language, setLanguage }) {
   const fetchAllData = async () => {
     if (!loading) setIsRefreshing(true);
     try {
-      const endpoints = [axios.get('http://127.0.0.1:5000/api/vaccination')];
-      if (!isProvisional) endpoints.push(axios.get('http://127.0.0.1:5000/api/history'));
+      const endpoints = [axios.get('https://vaccination-coverage-tracker-backend.onrender.com/api/vaccination')];
+      if (!isProvisional) endpoints.push(axios.get('https://vaccination-coverage-tracker-backend.onrender.com/api/history'));
       const results = await Promise.all(endpoints);
       setAllData(results[0].data);
       if (!isProvisional) setHistory(results[1].data);
@@ -105,7 +105,7 @@ export default function Dashboard({ user, onLogout, language, setLanguage }) {
 
   const fetchPendingUsers = async () => {
     try {
-      const res = await axios.get('http://127.0.0.1:5000/api/admin/pending-users');
+      const res = await axios.get('https://vaccination-coverage-tracker-backend.onrender.com/api/admin/pending-users');
       setPendingUsers(res.data);
     } catch (err) { console.error(err); }
   };
@@ -116,7 +116,7 @@ export default function Dashboard({ user, onLogout, language, setLanguage }) {
                   ? 'All' 
                   : country;
     try {
-      await axios.post('http://127.0.0.1:5000/api/admin/approve-user', { user_id: userId, scope: scope });
+      await axios.post('https://vaccination-coverage-tracker-backend.onrender.com/api/admin/approve-user', { user_id: userId, scope: scope });
       alert(`Utilisateur ${name} approuvé !`);
       fetchPendingUsers();
     } catch (err) { alert("Erreur lors de l'approbation"); }
@@ -125,7 +125,7 @@ export default function Dashboard({ user, onLogout, language, setLanguage }) {
   const handleReject = async (userId, name) => {
     if (!window.confirm(`Supprimer définitivement l'accès pour ${name} ?`)) return;
     try {
-      await axios.post('http://127.0.0.1:5000/api/admin/reject-user', { user_id: userId });
+      await axios.post('https://vaccination-coverage-tracker-backend.onrender.com/api/admin/reject-user', { user_id: userId });
       alert(`Utilisateur ${name} rejeté.`);
       fetchPendingUsers();
     } catch (err) { alert("Erreur lors du rejet"); }

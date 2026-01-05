@@ -4,6 +4,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_mail import Mail, Message
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -18,6 +19,8 @@ DB_CONFIG = {
     "port": "5432"
 }
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 # Configuration Email
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
@@ -29,7 +32,7 @@ app.config['MAIL_DEFAULT_SENDER'] = ('Vaccination Tracker', app.config['MAIL_USE
 mail = Mail(app)
 
 def get_db_connection():
-    return psycopg2.connect(**DB_CONFIG)
+    return psycopg2.connect(DATABASE_URL)
 
 # --- 2. AUTHENTIFICATION ---
 

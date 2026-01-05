@@ -19,7 +19,7 @@ export default function DataUpload() {
 
     setStatus('uploading');
     try {
-      const response = await axios.post('http://127.0.0.1:5000/api/upload', formData, {
+      const response = await axios.post('https://vaccination-coverage-tracker-backend.onrender.com/api/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       setStatus('success');

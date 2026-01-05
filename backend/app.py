@@ -7,7 +7,7 @@ from flask_mail import Mail, Message
 import os
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["http://localhost:3000", "https://vaccination-coverage-tracker-frontend.onrender.com"])
 
 # --- 1. CONFIGURATION ---
 

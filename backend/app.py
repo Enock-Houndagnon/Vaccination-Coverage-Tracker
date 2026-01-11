@@ -7,7 +7,7 @@ from flask_mail import Mail, Message
 import os
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:3000", "https://vaccination-coverage-tracker-frontend.onrender.com"])
+CORS(app)
 
 # --- 1. CONFIGURATION ---
 
@@ -19,7 +19,101 @@ DB_CONFIG = {
     "port": "5432"
 }
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Script SQL complet pour l'initialisation automatique
+INIT_DB_SQL = """
+-- Table des Utilisateurs
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(255),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role VARCHAR(50) DEFAULT 'user',
+    status VARCHAR(50) DEFAULT 'provisional',
+    gender VARCHAR(20),
+    country VARCHAR(100),
+    company VARCHAR(100),
+    job_title VARCHAR(100),
+    scope VARCHAR(100)
+);
+
+-- Table des Données de Vaccination
+CREATE TABLE IF NOT EXISTS raw_data (
+    id SERIAL PRIMARY KEY,
+    country VARCHAR(100),
+    location_name VARCHAR(100),
+    vaccine_type VARCHAR(100),
+    age_group VARCHAR(50),
+    coverage_rate NUMERIC,
+    vaccination_date DATE,
+    filename VARCHAR(255)
+);
+
+-- Table des Logs d'Upload
+CREATE TABLE IF NOT EXISTS upload_logs (
+    id SERIAL PRIMARY KEY,
+    filename VARCHAR(255),
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table des Baselines (Objectifs)
+CREATE TABLE IF NOT EXISTS baselines (
+    id SERIAL PRIMARY KEY,
+    country VARCHAR(100),
+    vaccine_type VARCHAR(100),
+    target_rate NUMERIC,
+    year INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table des Alertes
+CREATE TABLE IF NOT EXISTS alerts (
+    id SERIAL PRIMARY KEY,
+    type VARCHAR(50),
+    message TEXT,
+    country VARCHAR(100),
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+def get_db_connection():
+    try:
+        url = os.getenv("DATABASE_URL")
+        if url:
+            return psycopg2.connect(url)
+        return psycopg2.connect(**DB_CONFIG)
+    except Exception as e:
+        print(f"ERREUR DE CONNEXION DB : {e}")
+        return None
+
+def init_db():
+    """Initialise la base de données et crée un admin par défaut si nécessaire."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SET search_path TO public")
+            
+            # Création de toutes les tables
+            cur.execute(INIT_DB_SQL)
+            
+            # Création d'un admin par défaut si la table users est vide
+            cur.execute("SELECT COUNT(*) FROM users")
+            if cur.fetchone()[0] == 0:
+                print("⚠️ Aucune donnée utilisateur. Création de l'admin par défaut...")
+                hashed_pw = generate_password_hash("admin123")
+                cur.execute("""
+                    INSERT INTO users (full_name, email, password_hash, role, status, scope)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, ("Enock HOUNDAGNON", "admin@gmail.com", Admin123, 'admin', 'active', 'All'))
+            
+            conn.commit()
+            print("✅ Base de données prête (Structure & Admin par défaut).")
+            cur.close()
+        except Exception as e:
+            print(f"❌ Erreur lors de l'init DB : {e}")
+        finally:
+            conn.close()
 
 # Configuration Email
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
@@ -27,12 +121,8 @@ app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
 app.config['MAIL_USERNAME'] = 'votre-email@gmail.com' 
 app.config['MAIL_PASSWORD'] = 'votre-code-application' 
-app.config['MAIL_DEFAULT_SENDER'] = ('Vaccination Tracker', app.config['MAIL_USERNAME'])
 
 mail = Mail(app)
-
-def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
 
 # --- 2. AUTHENTIFICATION ---
 
@@ -42,164 +132,175 @@ def register():
     full_name = data.get('full_name')
     email = data.get('email')
     password = data.get('password')
-    gender = data.get('gender')
-    company = data.get('company')
-    job = data.get('job')
-    country = data.get('country')
     
     if not email or not password or not full_name:
-        return jsonify({"error": "Nom, Email et mot de passe requis"}), 400
+        return jsonify({"error": "Données incomplètes"}), 400
 
     hashed_pw = generate_password_hash(password)
+    conn = get_db_connection()
+    if conn is None: return jsonify({"error": "Erreur DB"}), 500
     
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
+        cur.execute("SET search_path TO public")
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
             return jsonify({"error": "Cet email est déjà utilisé"}), 409
 
-        # Insertion initiale : role='user' et status='provisional'
         cur.execute("""
             INSERT INTO users (full_name, email, password_hash, role, status, gender, country, company, job_title, scope)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (full_name, email, hashed_pw, 'user', 'provisional', gender, country, company, job, country))
-        
+        """, (full_name, email, hashed_pw, 'user', 'provisional', 
+              data.get('gender'), data.get('country'), data.get('company'), 
+              data.get('job'), data.get('country')))
         conn.commit()
-        cur.close()
-        conn.close()
         return jsonify({"message": "Inscription réussie."}), 201
     except Exception as e:
+        print(f"Erreur Register : {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
+    email = data.get('email')
+    password = data.get('password')
+    
+    conn = get_db_connection()
+    if conn is None: return jsonify({"error": "Erreur DB"}), 500
+
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM users WHERE email = %s", (data.get('email'),))
+        cur.execute("SET search_path TO public")
+        cur.execute("SELECT * FROM users WHERE email = %s", (email,))
         user = cur.fetchone()
-        cur.close()
-        conn.close()
         
-        if user and check_password_hash(user['password_hash'], data.get('password')):
+        if user and check_password_hash(user['password_hash'], password):
             return jsonify({
                 "user": {
                     "id": user['id'], 
                     "full_name": user['full_name'],
                     "email": user['email'], 
-                    "scope": user['scope'], 
                     "role": user['role'],
-                    "status": user['status']
+                    "status": user['status'],
+                    "scope": user['scope']
                 }
             }), 200
         return jsonify({"error": "Identifiants incorrects"}), 401
     except Exception as e:
+        print(f"Erreur Login : {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
 
-# --- 3. GESTION ADMINISTRATIVE (CORRIGÉ) ---
+# --- 3. ROUTES DU DASHBOARD ---
+
+@app.route('/api/vaccination', methods=['GET'])
+def get_vaccination_data():
+    conn = get_db_connection()
+    if not conn: return jsonify([]), 500
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SET search_path TO public")
+        cur.execute("SELECT * FROM raw_data ORDER BY id DESC")
+        data = cur.fetchall()
+        return jsonify(data), 200
+    except Exception as e:
+        print(f"Erreur Vaccination: {e}")
+        return jsonify([]), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    conn = get_db_connection()
+    if not conn: return jsonify([]), 500
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SET search_path TO public")
+        query = """
+            SELECT ul.id, ul.filename, ul.upload_date, 
+            (SELECT string_agg(DISTINCT country, ', ') FROM raw_data WHERE filename = ul.filename) as countries,
+            (SELECT string_agg(DISTINCT vaccine_type, ', ') FROM raw_data WHERE filename = ul.filename) as vaccines
+            FROM upload_logs ul ORDER BY ul.upload_date DESC
+        """
+        cur.execute(query)
+        data = cur.fetchall()
+        return jsonify(data), 200
+    except Exception as e:
+        print(f"Erreur History: {e}")
+        return jsonify([]), 500
+    finally:
+        cur.close()
+        conn.close()
+
+# --- 4. ROUTES ADMIN ---
 
 @app.route('/api/admin/pending-users', methods=['GET'])
 def get_pending_users():
+    conn = get_db_connection()
+    if not conn: return jsonify([]), 500
     try:
-        conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SET search_path TO public")
         cur.execute("SELECT id, full_name, email, country, company, job_title, status FROM users WHERE status = 'provisional'")
         users = cur.fetchall()
+        return jsonify(users), 200
+    except Exception as e:
+        print(f"Erreur Pending: {e}")
+        return jsonify([]), 500
+    finally:
         cur.close()
         conn.close()
-        return jsonify(users)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/admin/approve-user', methods=['POST'])
 def approve_user():
     data = request.json
     user_id = data.get('user_id')
-    final_scope = data.get('scope') # 'All' ou le nom du pays
-    
+    scope = data.get('scope')
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # On vérifie si l'utilisateur existe
-        cur.execute("SELECT email, full_name FROM users WHERE id = %s", (user_id,))
-        user = cur.fetchone()
-
-        if user:
-            # MISE À JOUR : On change le STATUT, le RÔLE (devient admin) et le SCOPE
-            cur.execute("""
-                UPDATE users 
-                SET status = 'active', role = 'admin', scope = %s 
-                WHERE id = %s
-            """, (final_scope, user_id))
-            conn.commit()
-
-            # Optionnel : Envoi email
-            try:
-                msg = Message("Accès Activé", recipients=[user['email']])
-                msg.body = f"Félicitations {user['full_name']}. Votre accès est validé en tant qu'administrateur ({final_scope})."
-                mail.send(msg)
-            except: pass
-
-        cur.close()
-        conn.close()
-        return jsonify({"message": "Utilisateur approuvé et promu Admin"}), 200
+        cur = conn.cursor()
+        cur.execute("SET search_path TO public")
+        cur.execute("UPDATE users SET status = 'active', role = 'admin', scope = %s WHERE id = %s", (scope, user_id))
+        conn.commit()
+        return jsonify({"message": "Approuvé"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route('/api/admin/reject-user', methods=['POST'])
 def reject_user():
     data = request.json
     user_id = data.get('user_id')
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
-        # SUPPRESSION RÉELLE de la table users
+        cur.execute("SET search_path TO public")
         cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
         conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({"message": "Utilisateur supprimé définitivement"}), 200
+        return jsonify({"message": "Rejeté"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-# --- 4. DONNÉES & HISTORIQUE ---
-
-@app.route('/api/vaccination', methods=['GET'])
-def get_vaccination_data():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM raw_data ORDER BY id DESC")
-        data = cur.fetchall()
+    finally:
         cur.close()
         conn.close()
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/history', methods=['GET'])
-def get_history():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        # Requête complète pour récupérer fichier, pays et vaccins
-        query = """
-            SELECT 
-                ul.id, ul.filename, ul.upload_date, 
-                (SELECT string_agg(DISTINCT country, ', ') FROM raw_data WHERE filename = ul.filename) as countries,
-                (SELECT string_agg(DISTINCT vaccine_type, ', ') FROM raw_data WHERE filename = ul.filename) as vaccines
-            FROM upload_logs ul ORDER BY ul.upload_date DESC
-        """
-        cur.execute(query)
-        data = cur.fetchall()
-        cur.close()
-        conn.close()
-        return jsonify(data)
-    except:
-        return jsonify([])
+# --- 5. DÉMARRAGE ---
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Initialisation automatique au lancement
+    init_db()
+    
+    print("Vérification des routes au démarrage...")
+    for rule in app.url_map.iter_rules():
+        print(f"Route enregistrée: {rule.endpoint} -> {rule.rule}")
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)

@@ -105,7 +105,7 @@ def init_db():
                 cur.execute("""
                     INSERT INTO users (full_name, email, password_hash, role, status, scope)
                     VALUES (%s, %s, %s, %s, %s, %s)
-                """, ("Enock HOUNDAGNON", "admin@gmail.com", Admin123, 'admin', 'active', 'All'))
+                """, ("Enock HOUNDAGNON", "admin@gmail.com", hashed_pw, 'admin', 'active', 'All'))
             
             conn.commit()
             print("✅ Base de données prête (Structure & Admin par défaut).")

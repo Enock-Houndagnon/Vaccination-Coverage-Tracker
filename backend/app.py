@@ -7,10 +7,12 @@ from flask_mail import Mail, Message
 import os
 
 app = Flask(__name__)
+# CORS est configuré pour accepter les requêtes de votre frontend React (Local et Render)
 CORS(app)
 
 # --- 1. CONFIGURATION ---
 
+# Paramètres locaux (utilisés si DATABASE_URL n'est pas définie)
 DB_CONFIG = {
     "host": "localhost",
     "database": "VacinationDB",
@@ -19,7 +21,7 @@ DB_CONFIG = {
     "port": "5432"
 }
 
-# Script SQL complet pour l'initialisation automatique
+# Script SQL complet pour l'initialisation automatique des tables
 INIT_DB_SQL = """
 -- Table des Utilisateurs
 CREATE TABLE IF NOT EXISTS users (
@@ -77,38 +79,44 @@ CREATE TABLE IF NOT EXISTS alerts (
 """
 
 def get_db_connection():
+    """Établit la connexion et force l'utilisation du schéma public."""
     try:
         url = os.getenv("DATABASE_URL")
         if url:
-            return psycopg2.connect(url)
-        return psycopg2.connect(**DB_CONFIG)
+            conn = psycopg2.connect(url)
+        else:
+            conn = psycopg2.connect(**DB_CONFIG)
+        
+        # On force le search_path à chaque nouvelle connexion
+        cur = conn.cursor()
+        cur.execute("SET search_path TO public")
+        cur.close()
+        return conn
     except Exception as e:
         print(f"ERREUR DE CONNEXION DB : {e}")
         return None
 
 def init_db():
-    """Initialise la base de données et crée un admin par défaut si nécessaire."""
+    """Initialise la structure de la base et crée l'admin par défaut."""
     conn = get_db_connection()
     if conn:
         try:
             cur = conn.cursor()
-            cur.execute("SET search_path TO public")
-            
-            # Création de toutes les tables
+            # 1. Création des tables si elles n'existent pas
             cur.execute(INIT_DB_SQL)
             
-            # Création d'un admin par défaut si la table users est vide
+            # 2. Vérification/Création de l'admin par défaut
             cur.execute("SELECT COUNT(*) FROM users")
             if cur.fetchone()[0] == 0:
-                print("⚠️ Aucune donnée utilisateur. Création de l'admin par défaut...")
-                hashed_pw = generate_password_hash("admin123")
+                print("⚠️ Aucune donnée utilisateur. Création de l'admin : Enock HOUNDAGNON")
+                hashed_pw = generate_password_hash("Admin123")
                 cur.execute("""
                     INSERT INTO users (full_name, email, password_hash, role, status, scope)
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """, ("Enock HOUNDAGNON", "admin@gmail.com", hashed_pw, 'admin', 'active', 'All'))
             
             conn.commit()
-            print("✅ Base de données prête (Structure & Admin par défaut).")
+            print("✅ Base de données initialisée avec succès.")
             cur.close()
         except Exception as e:
             print(f"❌ Erreur lors de l'init DB : {e}")
@@ -138,11 +146,10 @@ def register():
 
     hashed_pw = generate_password_hash(password)
     conn = get_db_connection()
-    if conn is None: return jsonify({"error": "Erreur DB"}), 500
+    if conn is None: return jsonify({"error": "Erreur de connexion base de données"}), 500
     
     try:
         cur = conn.cursor()
-        cur.execute("SET search_path TO public")
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
             return jsonify({"error": "Cet email est déjà utilisé"}), 409
@@ -169,11 +176,10 @@ def login():
     password = data.get('password')
     
     conn = get_db_connection()
-    if conn is None: return jsonify({"error": "Erreur DB"}), 500
+    if conn is None: return jsonify({"error": "Erreur de connexion base de données"}), 500
 
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SET search_path TO public")
         cur.execute("SELECT * FROM users WHERE email = %s", (email,))
         user = cur.fetchone()
         
@@ -204,12 +210,10 @@ def get_vaccination_data():
     if not conn: return jsonify([]), 500
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SET search_path TO public")
         cur.execute("SELECT * FROM raw_data ORDER BY id DESC")
         data = cur.fetchall()
         return jsonify(data), 200
     except Exception as e:
-        print(f"Erreur Vaccination: {e}")
         return jsonify([]), 500
     finally:
         cur.close()
@@ -221,7 +225,6 @@ def get_history():
     if not conn: return jsonify([]), 500
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SET search_path TO public")
         query = """
             SELECT ul.id, ul.filename, ul.upload_date, 
             (SELECT string_agg(DISTINCT country, ', ') FROM raw_data WHERE filename = ul.filename) as countries,
@@ -232,7 +235,6 @@ def get_history():
         data = cur.fetchall()
         return jsonify(data), 200
     except Exception as e:
-        print(f"Erreur History: {e}")
         return jsonify([]), 500
     finally:
         cur.close()
@@ -246,12 +248,10 @@ def get_pending_users():
     if not conn: return jsonify([]), 500
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SET search_path TO public")
         cur.execute("SELECT id, full_name, email, country, company, job_title, status FROM users WHERE status = 'provisional'")
         users = cur.fetchall()
         return jsonify(users), 200
     except Exception as e:
-        print(f"Erreur Pending: {e}")
         return jsonify([]), 500
     finally:
         cur.close()
@@ -265,10 +265,9 @@ def approve_user():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SET search_path TO public")
         cur.execute("UPDATE users SET status = 'active', role = 'admin', scope = %s WHERE id = %s", (scope, user_id))
         conn.commit()
-        return jsonify({"message": "Approuvé"}), 200
+        return jsonify({"message": "Utilisateur approuvé avec succès"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -282,10 +281,9 @@ def reject_user():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SET search_path TO public")
         cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
         conn.commit()
-        return jsonify({"message": "Rejeté"}), 200
+        return jsonify({"message": "Utilisateur rejeté"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -295,12 +293,14 @@ def reject_user():
 # --- 5. DÉMARRAGE ---
 
 if __name__ == '__main__':
-    # Initialisation automatique au lancement
+    # Initialisation automatique des tables et de l'admin au démarrage
     init_db()
     
-    print("Vérification des routes au démarrage...")
+    # Affichage des routes disponibles pour debug
+    print("\n--- ROUTES DISPONIBLES ---")
     for rule in app.url_map.iter_rules():
-        print(f"Route enregistrée: {rule.endpoint} -> {rule.rule}")
+        print(f"{rule.endpoint}: {rule.rule}")
+    print("--------------------------\n")
 
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
